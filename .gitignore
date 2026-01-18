@@ -1,0 +1,13 @@
+# --- System Files ---
+.DS_Store
+
+# --- Python & Environment ---
+__pycache__/
+
+# --- Data & Media ---
+data/
+
+# --- Scripts to Ignore ---
+
+
+# --- Notebooks to Ignore ---
