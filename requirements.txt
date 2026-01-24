@@ -6,3 +6,4 @@ duckdb>=1.1.0
 # Visualization
 matplotlib>=3.9.0
 plotly>=5.24.0
+seaborn>=0.13.2
