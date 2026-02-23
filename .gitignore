@@ -11,3 +11,14 @@ data/
 
 
 # --- Notebooks to Ignore ---
+
+# Model artifacts
+models/
+*.joblib
+*.pkl
+*.pickle
+
+# Data artifacts (optional)
+*.parquet
+*.feather
+*.csv
