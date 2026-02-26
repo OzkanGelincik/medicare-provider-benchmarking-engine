@@ -12,3 +12,4 @@ seaborn>=0.13.2
 scikit-learn<1.6
 xgboost
 catboost
+shap
