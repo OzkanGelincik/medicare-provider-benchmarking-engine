@@ -22,3 +22,6 @@ models/
 *.parquet
 *.feather
 *.csv
+
+# local artifacts
+artifacts/
