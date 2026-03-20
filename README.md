@@ -278,7 +278,9 @@ It does not claim fraud, wrongdoing, or intent. Any surfaced result requires dom
 ## 👨🏻‍💻 Author
 
 Ozkan Gelincik — Data Scientist
+
 🔗 LinkedIn: https://www.linkedin.com/in/ozkangelincik
+
 🌎 Visit my website: https://ozkangelincik.com
 
 
