@@ -24,6 +24,12 @@ A reproducible, end-to-end portfolio project that builds an **expected-cost benc
 5. **Python Shiny app (product layer)**  
    A narrative-first UI that lets someone explore the benchmark logic, anomalies, tiering, and explainability.
 
+
+---
+
+## 🚀 Live demo (Python Shiny)
+Explore the results interactively: https://ozkangelincikshinyapp.shinyapps.io/medicare-provider-benchmarking-engine/
+
 ---
 
 ## 🎯 Goal
