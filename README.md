@@ -35,7 +35,7 @@ Explore the results interactively: https://ozkangelincikshinyapp.shinyapps.io/me
 ## 🎯 Goal
 Build a system that answers:
 
-- **Row level:** “Which provider-service rows are most over-expected relative to comparable peers?”  
+- **Row level:** “Which provider-service rows are most over-expected relative to comparable peers?”
 - **Provider level:** “Which providers repeatedly show up as extreme over-expected?”  
 - **Segmentation:** “Can we tier providers into interpretable groups based on their anomaly footprint?”  
 - **Explainability:** “What provider characteristics are associated with being in the elevated anomaly cluster, beyond the clustering features?”
@@ -74,7 +74,7 @@ This file is the **single source of truth** used by:
 - Provider drill-downs
 - Anomaly workflows (via frozen worklists)
 
-### Why we moved to HCPCS-level benchmarking
+### Why I moved to HCPCS-level benchmarking
 The engine evolved to emphasize **HCPCS-level** benchmarking because it is:
 - more granular and interpretable for operational review,
 - better aligned with how anomalies are actioned (code-level review),
@@ -123,16 +123,16 @@ Across all products, the workflow is intentionally “audit-friendly”:
   - `residual = observed_cost - expected_cost`  
   - `oe_ratio = observed_cost / expected_cost`  
   - `log_oe = log(oe_ratio)`  
-- **Define peer slice:** comparison group within the same **HCPCS × Year** (and your fixed peer constraints).
+- **Define peer slice:** comparison group within the same **HCPCS × Year** (and our fixed peer constraints).
 - **Apply eligibility filters (row-level):**
   - Require **positive residual** (over-expected behavior).
   - Require **minimum slice support** `slice_n >= MIN_SLICE_N` (size-aware trust gate).
   - Require **high confidence** (e.g., strong support tier and sufficient volume thresholds, per frozen params).
 - **Score (robust tail):**
-  - Mark as a **robust tail event** if `log_oe` is in the **top 1% of its slice** (or your configured robust percentile rule).
+  - Mark as a **robust tail event** if `log_oe` is in the **top 1% of its slice** (or our configured robust percentile rule).
   - `anom_score_robust` reflects this robust tail exceedance (per frozen params).
 - **Rank + freeze:**
-  - Sort rows by `(anom_score_robust desc, log_oe desc, residual desc)` (or your configured ordering).
+  - Sort rows by `(anom_score_robust desc, log_oe desc, residual desc)` (or our configured ordering).
   - **Freeze top 200 rows** as the primary row-level worklist.
 
 **What it surfaces**
@@ -153,10 +153,10 @@ Across all products, the workflow is intentionally “audit-friendly”:
   - Require **minimum slice support** `slice_n >= MIN_SLICE_N`.
   - Require **high confidence** (same strict gate used in primary, per frozen params).
 - **Score (magnitude tail):**
-  - Emphasize **severity**, typically via `log_oe` and/or `residual` magnitude under your frozen magnitude-tail rule.
+  - Emphasize **severity**, typically via `log_oe` and/or `residual` magnitude under our frozen magnitude-tail rule.
   - `anom_score_mag` captures the “shock” intensity (per frozen params).
 - **Rank + freeze:**
-  - Sort rows by `(anom_score_mag desc, log_oe desc, residual desc)` (or your configured ordering).
+  - Sort rows by `(anom_score_mag desc, log_oe desc, residual desc)` (or our configured ordering).
   - **Freeze top 200 rows** as the alternative magnitude-focused worklist.
 
 **What it surfaces**
@@ -212,14 +212,14 @@ Across all products, the workflow is intentionally “audit-friendly”:
   - **Freeze top-N providers** as the shock/severity watchlist.
 
 **What it surfaces**
-- Providers who exhibit **“spike” behavior**, useful for triage when you care most about the highest-severity events.
+- Providers who exhibit **“spike” behavior**, useful for triage when we care most about the highest-severity events.
 
 ---
 
 ✅ **Why four products (and not one)**
 - **Robust products** are best for “repeatability” and defensible peer-relative outliers.
 - **Magnitude products** are best for “severity-first” triage and shock-style events.
-- Having both at **row** and **provider** levels lets you move from **worklists** (what happened) to **watchlists** (who repeatedly or severely shows it).
+- Having both at **row** and **provider** levels lets us move from **worklists** (what happened) to **watchlists** (who repeatedly or severely shows it).
 
 ---
 
@@ -244,8 +244,8 @@ Example counts from a recent frozen run (as seen in the app UI):
 
 ## 🧾 Explainer model (classification, explanation-first)
 ### Why classification exists in this project
-We did **not** build classification to “beat clustering.”  
-We built it to answer a defensible question:
+I did **not** build classification to “beat clustering.”  
+I built it to answer a defensible question:
 
 > “Among eligible providers, what characteristics are associated with being in `cluster_1` beyond the clustering features, and without leakage?”
 
