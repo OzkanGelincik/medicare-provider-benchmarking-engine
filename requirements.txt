@@ -2,6 +2,7 @@
 numpy>=2.1.0
 pandas>=2.2.0
 duckdb>=1.1.0
+pyarrow
 
 # Visualization
 matplotlib>=3.9.0
@@ -11,5 +12,10 @@ seaborn>=0.13.2
 # Modeling
 scikit-learn<1.6
 xgboost
-catboost
 shap
+joblib
+
+# Dashboard
+shiny
+shinywidgets
+

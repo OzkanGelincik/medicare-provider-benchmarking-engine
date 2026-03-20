@@ -1,0 +1,30 @@
+# ---------- Always ignore junk ----------
+**/.DS_Store
+**/__pycache__/
+**/*.pyc
+.git/
+catboost_info/
+
+# ---------- Never ship heavy training assets ----------
+data/
+models/
+eval_pack/
+holdout_sanity_pack/
+
+# ---------- Artifacts: allow only what app needs ----------
+# Start by ignoring all artifacts
+artifacts/**
+
+# Then allow-list the exact folders used by app.py
+!artifacts/eval_universe/**
+!artifacts/anomaly_surfaces/**
+!artifacts/provider_tiering/**
+!artifacts/provider_classification/**
+
+# But re-exclude known heavy/unused artifact branches
+artifacts/failure_analysis_v2/**
+artifacts/models/**
+artifacts/guardrails/**
+
+# ---------- Optional: don’t ship notebooks ----------
+*.ipynb
