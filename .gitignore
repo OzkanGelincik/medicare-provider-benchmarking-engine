@@ -25,3 +25,8 @@ models/
 
 # local artifacts
 artifacts/
+
+# Mindnode
+medicare_provider_benchmarking_engine_mind.mindnode/
+medicare_provider_benchmarking_engine_mind.mindnode
+
