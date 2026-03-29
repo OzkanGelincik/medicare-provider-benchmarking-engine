@@ -191,21 +191,36 @@ def make_exec_summary_tables(
     )
 
     # -----------------------------
-    # 5) Leak check: stable_all_years expected can change ONLY inside C5v2 allowed scope
+    # 5) Leak check: stable_all_years may change ONLY inside allowed scopes:
+    #  - C5v2 radiation planning cap
+    #  - C4a J2469 2020 uplift (new)
     # -----------------------------
-    stable_mask = (eval_src["hcpcs_stability_group"] == "stable_all_years").to_numpy()
+    stable_mask = (eval_src["hcpcs_stability_group"].astype(str) == "stable_all_years").to_numpy()
 
+    # C5v2 allowed scope
     codes = set(str(x) for x in guardrail_c5v2_policy["target_codes"])
-    tier = str(guardrail_c5v2_policy["expected_cost_support_tier"])
+    tier  = str(guardrail_c5v2_policy["expected_cost_support_tier"])
     route = str(guardrail_c5v2_policy["route"])
 
-    allowed = (
+    allowed_c5v2 = (
         stable_mask
         & (eval_src["HCPCS_Cd"].astype(str).isin(codes)).to_numpy()
         & (eval_src["expected_cost_support_tier"].astype(str) == tier).to_numpy()
         & (eval_src["route"].astype(str) == route).to_numpy()
         & (~eval_src["has_lag"].astype(bool)).to_numpy()
     )
+
+    # C4a allowed scope (new)
+    allowed_c4a = (
+        stable_mask
+        & (eval_src["Year"].astype(int) == 2020).to_numpy()
+        & (eval_src["HCPCS_Cd"].astype(str) == "J2469").to_numpy()
+        & (eval_src["expected_cost_support_tier"].astype(str) == "medium_high").to_numpy()
+        & (eval_src["route"].astype(str) == "cold_start").to_numpy()
+        & (~eval_src["has_lag"].astype(bool)).to_numpy()
+    )
+
+    allowed = allowed_c5v2 | allowed_c4a
 
     exp_dg = pd.to_numeric(eval_scored_dg["expected_cost"], errors="coerce").to_numpy(dtype="float64")
     exp_v3 = pd.to_numeric(eval_scored_dg_v3["expected_cost"], errors="coerce").to_numpy(dtype="float64")

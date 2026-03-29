@@ -28,7 +28,7 @@ A reproducible, end-to-end portfolio project that builds an **expected-cost benc
 ---
 
 ## 🚀 Live demo (Python Shiny)
-Explore the results interactively: https://ozkangelincikshinyapp.shinyapps.io/medicare-provider-benchmarking-engine/
+Explore the results interactively: https://ozkangelincikshinyapp.shinyapps.io/medicare-provider-benchmarking-engine1/
 
 ---
 
