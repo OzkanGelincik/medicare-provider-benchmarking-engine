@@ -260,12 +260,16 @@ def apply_guardrail_C4a_J2469_uplift(df: pd.DataFrame, policy: Dict[str, Any], t
 
     group = str(policy.get("hcpcs_stability_group", "other"))
 
+    # Make stability group comparison robust (avoids dtype/object surprises)
+    hg = out["hcpcs_stability_group"].astype(str) if "hcpcs_stability_group" in out.columns else None
+    m_group = (hg == group) if hg is not None else False  # if col missing, nothing eligible
+
     eligible = (
         (out["Year"] == year)
-        & (out["hcpcs_stability_group"] == group)
-        & (out["HCPCS_Cd"] == target)
-        & (out["expected_cost_support_tier"] == tier)
-        & (out["route"] == route)
+        & m_group
+        & (out["HCPCS_Cd"].astype(str) == target)
+        & (out["expected_cost_support_tier"].astype(str) == tier)
+        & (out["route"].astype(str) == route)
         & (~out["has_lag"])
         & np.isfinite(obs) & np.isfinite(exp) & np.isfinite(oe)
         & (oe >= oe_trigger)
