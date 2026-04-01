@@ -31,7 +31,15 @@ except Exception:
     render_widget = None
 
 import joblib
-
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    roc_auc_score,
+    average_precision_score,
+    confusion_matrix,
+    classification_report,
+    roc_curve,
+    precision_recall_curve,
+)
 
 # ============================================================
 # CONFIG) Artifact auto-discovery (always load the latest frozen runs)
@@ -764,15 +772,34 @@ CLUSTER_PROFILE_TABLE_COL_DICT = {
 
 
 
-EXPLAINER_CONFIG_TABLE_COL_DICT = {
-    "item": (
-        "Name of the configuration artifact being referenced. "
-        "These rows are provenance pointers, not model outputs."
-    ),
-    "value": (
-        "Resolved filesystem path to the artifact. "
-        "In this app, these are loaded from the latest frozen run under artifacts/provider_classification."
-    ),
+
+
+
+
+
+
+
+EXPLAINER_ARTIFACT_COL_DICT = {
+    "item": "Name of the frozen artifact or config file being referenced. These are provenance pointers, not model outputs.",
+    "value": "Resolved filesystem path to the frozen artifact used by the Explainer Model tab.",
+}
+
+EXPLAINER_CLASS_REPORT_COL_DICT = {
+    "label": "Target class being evaluated. cluster_0 = typical cost behavior; cluster_1 = elevated anomaly burden.",
+    "precision": "Of all rows predicted to be this class, the share that were correct.",
+    "recall": "Of all true rows in this class, the share correctly recovered by the explainer model.",
+    "f1-score": "Harmonic mean of precision and recall. Useful when balancing false positives and false negatives.",
+    "support": "Number of test-set rows belonging to this class.",
+}
+
+EXPLAINER_DRIVER_COL_DICT = {
+    "feature": "Model input feature or one-hot encoded category used by the frozen logistic explainer.",
+    "coef_log_odds": "Log-odds coefficient from logistic regression. Positive values push predictions toward cluster_1; negative values push away.",
+    "odds_ratio": "exp(coef_log_odds). Multiplicative change in odds associated with a one-unit increase in the feature, holding others fixed. For scaled numeric features, this is per +1 SD.",
+}
+
+EXPLAINER_BASELINE_COL_DICT = {
+    "baseline": "Reference category dropped by OneHotEncoder for each categorical variable. All categorical coefficients are interpreted relative to these baselines.",
 }
 
 
@@ -781,47 +808,11 @@ EXPLAINER_CONFIG_TABLE_COL_DICT = {
 
 
 
-WHATIF_FEATURE_VIEW_COL_DICT = {
-    "provider_type": (
-        "Provider specialty/type (from the provider scorecard). Used for peer context and segmentation."
-    ),
-    "state": (
-        "Provider state (2-letter). Provider-grain key and peer context."
-    ),
-    "cluster_label_v1": (
-        "Cluster assignment from tiering (eligible providers only). "
-        "Values: cluster_0 (typical) or cluster_1 (elevated anomaly burden)."
-    ),
-    "cluster_definition_v1": (
-        "Human-readable meaning of the cluster label. Descriptive label, not a quality grade."
-    ),
-    "n_anom_rows_robust": (
-        "Count of this provider’s row-grain records flagged as robust extreme events (repeat-offender definition). "
-        "This is the primary signal that separates cluster_1 from cluster_0."
-    ),
-    "anom_rate_pct_robust": (
-        "Percent of this provider’s rows that are robust anomalies. "
-        "Computed as 100 × (n_anom_rows_robust / n_rows_rob). Example: 0.69 means ~0.69% of rows were flagged."
-    ),
-    "p90_log_oe": (
-        "Provider-level 90th percentile of log(O/E) across that provider’s rows. "
-        "Interpretation: how elevated the provider’s upper tail looks. exp(p90_log_oe) is an approximate upper-tail O/E multiplier."
-    ),
-    "total_services_rob": (
-        "Total services aggregated for this provider in the tiering scorecard. Exposure/scale context."
-    ),
-    "pct_high_conf_rows": (
-        "Percent of this provider’s rows that meet the strict high-confidence gate (support tier and minimum evidence). "
-        "Higher values mean more of the provider’s data sits in strong-support regions."
-    ),
-    "n_anom_rows_mag": (
-        "Count of this provider’s rows flagged as magnitude (shock) events under the severity-first definition."
-    ),
-    "p95_log_oe_mag": (
-        "Provider-level p95 log(O/E) computed on shock-flagged rows only (severity-first). "
-        "If the provider has zero shock events, this is 0 by construction."
-    ),
-}
+
+
+
+
+
 
 
 
@@ -1214,6 +1205,279 @@ def _explainer_predict_and_contrib(npi: str) -> tuple[float | None, pd.DataFrame
 
 
 
+
+
+
+
+
+
+
+
+
+def _build_explainer_tab_diagnostics() -> dict:
+    """
+    Rebuilds the classification diagnostics shown in the slide:
+      - classification report table
+      - confusion matrix
+      - ROC curve
+      - PR curve
+      - baselines used by OHE
+      - top positive / negative coefficient tables
+
+    Uses:
+      - latest frozen provider scorecard
+      - latest eval_scored_DG_V3 parquet
+      - frozen final logistic explainer pipeline
+    """
+    out = {
+        "artifact_df": pd.DataFrame([
+            {"item": "model_joblib", "value": str(FINAL_EXPLAINER_JOBLIB)},
+            {"item": "classification_params_json", "value": str(CLF_PARAMS_JSON)},
+        ]),
+        "report_df": pd.DataFrame(),
+        "cm": np.array([[0, 0], [0, 0]], dtype=int),
+        "roc_auc": None,
+        "pr_auc": None,
+        "fpr": np.array([]),
+        "tpr": np.array([]),
+        "precision_curve": np.array([]),
+        "recall_curve": np.array([]),
+        "baseline_text": "Baselines unavailable",
+        "coef_pos": pd.DataFrame(),
+        "coef_neg": pd.DataFrame(),
+        "note": "Explainer diagnostics unavailable.",
+    }
+
+    if clf_pipe is None:
+        out["note"] = "No frozen explainer model could be loaded (joblib)."
+        return out
+
+    TARGET = "is_cluster_1"
+    NUM_FEATS = [
+        "p_cancer6", "p_diabetes", "p_ckd", "p_copd", "p_htn",
+        "bene_avg_risk_score", "years_since_enumeration",
+        "log_total_services_base",
+    ]
+    CAT_FEATS = ["ruca_bucket", "provider_type"]
+
+    eligible = scorecard_all.copy()
+    eligible = eligible[
+        eligible["cluster_label_v1"].astype(str).isin(["cluster_0", "cluster_1"])
+    ].copy()
+
+    if eligible.empty:
+        out["note"] = "No eligible providers found in provider_scorecard."
+        return out
+
+    keep_cols = [
+        "Rndrng_NPI", "provider_type", "state", "cluster_label_v1", "cluster_definition_v1"
+    ]
+    eligible = eligible[keep_cols].drop_duplicates()
+
+    eval_cols = [
+        "Rndrng_NPI", "provider_type", "state",
+        "p_cancer6", "p_diabetes", "p_ckd", "p_copd", "p_htn",
+        "bene_avg_risk_score", "years_since_enumeration",
+        "ruca_bucket", "benes", "services",
+    ]
+    ev = pd.read_parquet(EVAL_SCORED_PATH, columns=eval_cols).copy()
+
+    # Normalize join keys
+    for c in ["Rndrng_NPI", "provider_type", "state"]:
+        eligible[c] = eligible[c].astype(str)
+        ev[c] = ev[c].astype(str)
+
+    ev = ev.merge(
+        eligible[["Rndrng_NPI", "provider_type", "state"]],
+        on=["Rndrng_NPI", "provider_type", "state"],
+        how="inner",
+    )
+
+    if ev.empty:
+        out["note"] = "No matching provider covariates found in eval_scored_DG_V3."
+        return out
+
+    num_cols = [
+        "p_cancer6", "p_diabetes", "p_ckd", "p_copd", "p_htn",
+        "bene_avg_risk_score", "years_since_enumeration", "benes", "services",
+    ]
+    for c in num_cols:
+        ev[c] = pd.to_numeric(ev[c], errors="coerce")
+
+    def _wmean(x: pd.Series, w: pd.Series) -> float:
+        x = pd.to_numeric(x, errors="coerce")
+        w = pd.to_numeric(w, errors="coerce").fillna(0)
+        mask = x.notna() & np.isfinite(x) & np.isfinite(w)
+        if mask.sum() == 0:
+            return float("nan")
+        x = x[mask]
+        w = w[mask]
+        sw = float(w.sum())
+        if sw <= 0:
+            return float(x.mean())
+        return float((x * w).sum() / sw)
+
+    def _mode_str(x: pd.Series) -> str:
+        x = x.dropna().astype(str)
+        if len(x) == 0:
+            return "Unknown"
+        mode = x.mode(dropna=True)
+        return str(mode.iloc[0]) if len(mode) else "Unknown"
+
+    rows = []
+    for (npi, ptype, state), g in ev.groupby(["Rndrng_NPI", "provider_type", "state"], dropna=False):
+        rows.append({
+            "Rndrng_NPI": str(npi),
+            "provider_type": str(ptype),
+            "state": str(state),
+            "p_cancer6": _wmean(g["p_cancer6"], g["benes"]),
+            "p_diabetes": _wmean(g["p_diabetes"], g["benes"]),
+            "p_ckd": _wmean(g["p_ckd"], g["benes"]),
+            "p_copd": _wmean(g["p_copd"], g["benes"]),
+            "p_htn": _wmean(g["p_htn"], g["benes"]),
+            "bene_avg_risk_score": _wmean(g["bene_avg_risk_score"], g["benes"]),
+            "years_since_enumeration": (
+                float(pd.to_numeric(g["years_since_enumeration"], errors="coerce").dropna().median())
+                if pd.to_numeric(g["years_since_enumeration"], errors="coerce").dropna().shape[0] > 0
+                else np.nan
+            ),
+            "ruca_bucket": _mode_str(g["ruca_bucket"]),
+            "log_total_services_base": float(np.log1p(np.nansum(pd.to_numeric(g["services"], errors="coerce").to_numpy()))),
+        })
+
+    cov_df = pd.DataFrame(rows)
+
+    clf_df_app = eligible.merge(
+        cov_df,
+        on=["Rndrng_NPI", "provider_type", "state"],
+        how="inner",
+    ).copy()
+
+    if clf_df_app.empty:
+        out["note"] = "Could not assemble explainer diagnostics dataset."
+        return out
+
+
+
+
+
+
+    clf_df_app[TARGET] = (clf_df_app["cluster_label_v1"].astype(str) == "cluster_1").astype(int)
+
+    # Defensive cleanup: this frozen logistic pipeline does NOT have an imputer
+    clf_df_app = clf_df_app.copy()
+    clf_df_app[NUM_FEATS] = clf_df_app[NUM_FEATS].apply(pd.to_numeric, errors="coerce")
+    clf_df_app = clf_df_app.replace([np.inf, -np.inf], np.nan)
+
+    model_cols = NUM_FEATS + CAT_FEATS + [TARGET]
+    n_before = len(clf_df_app)
+    clf_df_app = clf_df_app.dropna(subset=model_cols).copy()
+    n_after = len(clf_df_app)
+
+    if clf_df_app.empty:
+        out["note"] = "Explainer diagnostics unavailable after dropping rows with missing model inputs."
+        return out
+
+    # Need both classes present after cleanup
+    class_counts = clf_df_app[TARGET].value_counts(dropna=False)
+    if set(class_counts.index.tolist()) != {0, 1}:
+        out["note"] = "Explainer diagnostics unavailable because both classes are not present after input cleanup."
+        return out
+
+    X = clf_df_app[NUM_FEATS + CAT_FEATS].copy()
+    y = clf_df_app[TARGET].astype(int).to_numpy()
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.25, random_state=7, stratify=y
+    )
+
+    p_test = clf_pipe.predict_proba(X_test)[:, 1]
+
+
+
+
+
+
+    pred_test = (p_test >= 0.50).astype(int)
+
+    roc = float(roc_auc_score(y_test, p_test))
+    pr = float(average_precision_score(y_test, p_test))
+    cm = confusion_matrix(y_test, pred_test)
+
+    rep = classification_report(
+        y_test, pred_test, digits=3, output_dict=True, zero_division=0
+    )
+    report_df = (
+        pd.DataFrame(rep)
+        .T
+        .reset_index()
+        .rename(columns={"index": "label"})
+    )
+    report_df = report_df[report_df["label"].isin(["0", "1"])].copy()
+    report_df["label"] = report_df["label"].map({"0": "cluster_0", "1": "cluster_1"})
+    report_df = report_df[["label", "precision", "recall", "f1-score", "support"]]
+
+    fpr, tpr, _ = roc_curve(y_test, p_test)
+    precision_curve, recall_curve, _ = precision_recall_curve(y_test, p_test)
+
+    preprocess = clf_pipe.named_steps["preprocess"]
+    model = clf_pipe.named_steps["model"]
+    ohe = preprocess.named_transformers_["cat"]
+
+    baselines = []
+    for feat, cats, dropped_idx in zip(CAT_FEATS, ohe.categories_, ohe.drop_idx_):
+        base = cats[dropped_idx] if dropped_idx is not None else None
+        baselines.append(f"{feat}: {base}")
+    baseline_text = " | ".join(baselines)
+
+    cat_names = list(ohe.get_feature_names_out(CAT_FEATS))
+    feat_names = NUM_FEATS + cat_names
+    coefs = model.coef_.ravel()
+
+    coef_df = (
+        pd.DataFrame({"feature": feat_names, "coef_log_odds": coefs})
+        .assign(odds_ratio=lambda d: np.exp(d["coef_log_odds"]))
+        .sort_values("coef_log_odds", ascending=False)
+    )
+
+    coef_pos = coef_df.head(15).copy()
+    coef_neg = coef_df.tail(15).iloc[::-1].copy()
+
+    out.update({
+        "report_df": report_df,
+        "cm": cm,
+        "roc_auc": roc,
+        "pr_auc": pr,
+        "fpr": fpr,
+        "tpr": tpr,
+        "precision_curve": precision_curve,
+        "recall_curve": recall_curve,
+        "baseline_text": baseline_text,
+        "coef_pos": coef_pos,
+        "coef_neg": coef_neg,
+        "note": f"Explainer model loaded from frozen artifact. Classification diagnostics below are rebuilt from the frozen model and latest eligible provider data. Rows used after input cleanup: {n_after:,} of {n_before:,}.",
+    })
+    return out
+
+
+EXPLAINER_TAB_DIAG = _build_explainer_tab_diagnostics()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def _apply_filters_scorecard(df: pd.DataFrame, provider_type: str, state: str, eligible_only: bool) -> pd.DataFrame:
     out = df.copy()
     if provider_type and provider_type != "All":
@@ -1473,41 +1737,94 @@ app_ui = ui.page_fluid(
             ),
         ),
 
+
+
+
+
+
+
+
+
+
+
         # ----------------------------------------------------
         # 5) EXPLAINER MODEL
         # ----------------------------------------------------
         ui.nav_panel(
             "Explainer Model",
             ui.p(
-                "Interpretability module. Not decision logic. "
-                "Answers: what characteristics are associated with cluster_1 among eligible providers.",
+                "Interpretability module. These diagnostics summarize how the frozen logistic explainer separates cluster_1 from cluster_0 among eligible providers.",
                 class_="muted",
             ),
 
-
-
-            # Stack explainer + what-if vertically (instead of side-by-side)
             ui.card(
                 ui.card_header("Explainer artifact and config"),
                 ui.output_ui("explainer_note"),
-                ui.output_data_frame("tbl_explainer_drivers"),
-                ui.output_ui("tbl_explainer_config_dict"),
+                ui.output_data_frame("tbl_explainer_artifact"),
+                ui.output_ui("tbl_explainer_artifact_dict"),
             ),
+
             ui.hr(),
+
             ui.card(
-                ui.card_header("What-if explorer (provider-level)"),
-                ui.input_text("ex_npi", "NPI (exact)", value=""),
-                ui.output_ui("ex_pred"),
-                ui.output_data_frame("ex_feature_view"),
-                ui.output_ui("tbl_whatif_feature_view_dict"),
-                ui.p("Kept simple for portfolio. Honest about limitations.", class_="muted"),
+                ui.card_header("Classification report"),
+                ui.output_data_frame("tbl_explainer_classification_report"),
+                ui.output_ui("tbl_explainer_classification_report_dict"),
             ),
 
+            ui.hr(),
 
+            ui.layout_columns(
+                ui.card(
+                    ui.card_header("Confusion Matrix @ 0.50 Threshold"),
+                    ui.output_plot("plt_explainer_cm"),
+                ),
+                ui.card(
+                    ui.card_header("ROC Curve"),
+                    ui.output_plot("plt_explainer_roc"),
+                ),
+                ui.card(
+                    ui.card_header("Precision-Recall Curve"),
+                    ui.output_plot("plt_explainer_pr"),
+                ),
+                col_widths=[4, 4, 4],
+            ),
 
+            ui.hr(),
 
+            ui.card(
+                ui.card_header("Baselines used by the explainer"),
+                ui.output_ui("txt_explainer_baselines"),
+                ui.output_ui("tbl_explainer_baselines_dict"),
+            ),
 
+            ui.hr(),
+
+            ui.layout_columns(
+                ui.card(
+                    ui.card_header("Top positive drivers (higher => more likely cluster_1)"),
+                    ui.output_data_frame("tbl_explainer_pos_drivers"),
+                    ui.output_ui("tbl_explainer_pos_driver_dict"),
+                ),
+                ui.card(
+                    ui.card_header("Top negative drivers (lower => less likely cluster_1)"),
+                    ui.output_data_frame("tbl_explainer_neg_drivers"),
+                    ui.output_ui("tbl_explainer_neg_driver_dict"),
+                ),
+                col_widths=[6, 6],
+            ),
         ),
+
+
+
+
+
+
+
+
+
+
+
 
         # ----------------------------------------------------
         # 5.5) PROVIDER PROFILE (stitched narrative)
@@ -2349,32 +2666,37 @@ def server(input, output, session):
 
 
 
+
+
+
+
+
+
+
+
     # -----------------------------
     # EXPLAINER MODEL
     # -----------------------------
     @output
     @render.ui
     def explainer_note():
-        if clf_pipe is None:
-            return ui.p("No frozen explainer model could be loaded (joblib).", class_="muted")
-        return ui.p("Explainer model loaded from frozen artifact. Explanation only.", class_="muted")
+        return ui.p(EXPLAINER_TAB_DIAG["note"], class_="muted")
+
 
     @output
     @render.data_frame
-    def tbl_explainer_drivers():
-        rows = []
-        rows.append({"item": "model_joblib", "value": str(FINAL_EXPLAINER_JOBLIB)})
-        rows.append({"item": "classification_params_json", "value": str(CLF_PARAMS_JSON)})
-        return render.DataGrid(pd.DataFrame(rows), height="220px")
+    def tbl_explainer_artifact():
+        return render.DataGrid(EXPLAINER_TAB_DIAG["artifact_df"], height="220px")
+
 
 
 
 
     @output
     @render.ui
-    def tbl_explainer_config_dict():
+    def tbl_explainer_artifact_dict():
         lines = ["### Column dictionary (Explainer Model: explainer artifact and config)\n"]
-        for col, desc in EXPLAINER_CONFIG_TABLE_COL_DICT.items():
+        for col, desc in EXPLAINER_ARTIFACT_COL_DICT.items():
             lines.append(f"- **{col}**: {desc}")
         return ui.markdown("\n".join(lines))
 
@@ -2382,58 +2704,185 @@ def server(input, output, session):
 
 
 
-    @output
-    @render.ui
-    def ex_pred():
-        npi = input.ex_npi().strip()
-        if not npi:
-            return ui.p("Enter an NPI to see the explainer view.", class_="muted")
-
-        hit = scorecard_all[scorecard_all["Rndrng_NPI"].astype(str) == npi]
-        if len(hit) == 0:
-            return ui.p("NPI not found in provider scorecard.", class_="muted")
-
-        row = hit.iloc[0]
-        lab = str(row.get("cluster_label_v1", "unknown"))
-        msg = f"Provider cluster label: {lab}. {row.get('cluster_definition_v1','')}"
-        if clf_pipe is None:
-            return ui.p(msg + " (Explainer model not loaded.)", class_="muted")
-
-        p, _ = _explainer_predict_and_contrib(npi)
-        if p is None:
-            return ui.p(msg + " (No covariates found for explainer input.)", class_="muted")
-
-        return ui.p(msg + f" Predicted P(cluster_1): {p:.3f}", class_="muted")
 
     @output
     @render.data_frame
-    def ex_feature_view():
-        npi = input.ex_npi().strip()
-        if not npi:
+    def tbl_explainer_classification_report():
+        df = EXPLAINER_TAB_DIAG["report_df"].copy()
+        if df.empty:
             return render.DataGrid(pd.DataFrame(), height="220px")
-        hit = scorecard_all[scorecard_all["Rndrng_NPI"].astype(str) == npi]
-        if len(hit) == 0:
-            return render.DataGrid(pd.DataFrame(), height="220px")
-        row = hit.iloc[0:1].copy()
+        return render.DataGrid(df.round(3), height="220px")
 
-        cols = [
-            "provider_type","state","cluster_label_v1","cluster_definition_v1",
-            "n_anom_rows_robust","anom_rate_pct_robust","p90_log_oe","total_services_rob",
-            "pct_high_conf_rows","n_anom_rows_mag","p95_log_oe_mag"
-        ]
-        cols = [c for c in cols if c in row.columns]
-        return render.DataGrid(row[cols], height="220px")
+
 
 
 
 
     @output
     @render.ui
-    def tbl_whatif_feature_view_dict():
-        lines = ["### Column dictionary (Explainer Model: what-if provider feature view)\n"]
-        for col, desc in WHATIF_FEATURE_VIEW_COL_DICT.items():
+    def tbl_explainer_classification_report_dict():
+        lines = ["### Column dictionary (Explainer Model: classification report)\n"]
+        for col, desc in EXPLAINER_CLASS_REPORT_COL_DICT.items():
             lines.append(f"- **{col}**: {desc}")
         return ui.markdown("\n".join(lines))
+
+
+
+
+
+
+
+    @output
+    @render.plot(alt="Explainer confusion matrix")
+    def plt_explainer_cm():
+        cm = EXPLAINER_TAB_DIAG["cm"]
+
+        fig, ax = plt.subplots(figsize=(5, 4))
+        im = ax.imshow(cm, interpolation="nearest", aspect="auto")
+        fig.colorbar(im, ax=ax)
+
+        ax.set_title("Confusion Matrix @ 0.50 Threshold")
+        ax.set_xlabel("Predicted label")
+        ax.set_ylabel("True label")
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+        ax.set_xticklabels(["cluster_0", "cluster_1"])
+        ax.set_yticklabels(["cluster_0", "cluster_1"])
+
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                ax.text(j, i, f"{cm[i, j]}", ha="center", va="center")
+
+        fig.tight_layout()
+        return fig
+
+
+    @output
+    @render.plot(alt="Explainer ROC curve")
+    def plt_explainer_roc():
+        fpr = EXPLAINER_TAB_DIAG["fpr"]
+        tpr = EXPLAINER_TAB_DIAG["tpr"]
+        roc_auc = EXPLAINER_TAB_DIAG["roc_auc"]
+
+        fig, ax = plt.subplots(figsize=(5, 4))
+        if len(fpr) > 0:
+            ax.plot(fpr, tpr, label=f"ROC AUC = {roc_auc:.3f}")
+            ax.plot([0, 1], [0, 1], linestyle="--")
+            ax.legend(loc="lower right", frameon=False)
+        else:
+            ax.text(0.5, 0.5, "ROC unavailable", ha="center", va="center")
+
+        ax.set_title("ROC Curve")
+        ax.set_xlabel("False Positive Rate")
+        ax.set_ylabel("True Positive Rate")
+        fig.tight_layout()
+        return fig
+
+
+    @output
+    @render.plot(alt="Explainer precision-recall curve")
+    def plt_explainer_pr():
+        precision_curve = EXPLAINER_TAB_DIAG["precision_curve"]
+        recall_curve = EXPLAINER_TAB_DIAG["recall_curve"]
+        pr_auc = EXPLAINER_TAB_DIAG["pr_auc"]
+
+        fig, ax = plt.subplots(figsize=(5, 4))
+        if len(precision_curve) > 0 and len(recall_curve) > 0:
+            ax.plot(recall_curve, precision_curve, label=f"PR AUC = {pr_auc:.3f}")
+            ax.legend(loc="lower left", frameon=False)
+        else:
+            ax.text(0.5, 0.5, "PR curve unavailable", ha="center", va="center")
+
+        ax.set_title("Precision-Recall Curve")
+        ax.set_xlabel("Recall")
+        ax.set_ylabel("Precision")
+        fig.tight_layout()
+        return fig
+
+
+    @output
+    @render.ui
+    def txt_explainer_baselines():
+        txt = EXPLAINER_TAB_DIAG["baseline_text"]
+        return ui.markdown(f"**Baselines** | `{txt}`")
+
+
+
+
+
+
+    @output
+    @render.ui
+    def tbl_explainer_baselines_dict():
+        lines = ["### Column dictionary (Explainer Model: baselines)\n"]
+        for col, desc in EXPLAINER_BASELINE_COL_DICT.items():
+            lines.append(f"- **{col}**: {desc}")
+        return ui.markdown("\n".join(lines))
+
+
+
+
+
+
+
+    @output
+    @render.data_frame
+    def tbl_explainer_pos_drivers():
+        df = EXPLAINER_TAB_DIAG["coef_pos"].copy()
+        if df.empty:
+            return render.DataGrid(pd.DataFrame(), height="320px")
+        return render.DataGrid(df.round(6), height="320px")
+
+
+
+
+
+    @output
+    @render.ui
+    def tbl_explainer_pos_driver_dict():
+        lines = ["### Column dictionary (Explainer Model: driver tables)\n"]
+        for col, desc in EXPLAINER_DRIVER_COL_DICT.items():
+            lines.append(f"- **{col}**: {desc}")
+        return ui.markdown("\n".join(lines))
+
+
+
+
+
+
+
+    @output
+    @render.data_frame
+    def tbl_explainer_neg_drivers():
+        df = EXPLAINER_TAB_DIAG["coef_neg"].copy()
+        if df.empty:
+            return render.DataGrid(pd.DataFrame(), height="320px")
+        return render.DataGrid(df.round(6), height="320px")
+
+
+
+    @output
+    @render.ui
+    def tbl_explainer_neg_driver_dict():
+        lines = ["### Column dictionary (Explainer Model: driver tables)\n"]
+        for col, desc in EXPLAINER_DRIVER_COL_DICT.items():
+            lines.append(f"- **{col}**: {desc}")
+        return ui.markdown("\n".join(lines))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
