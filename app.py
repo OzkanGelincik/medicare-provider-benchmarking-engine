@@ -9,7 +9,7 @@
 #   - Reproducible: loads frozen artifacts + params manifests
 #   - Drill-downs are lazy: eval_scored_DG_V3 is only filtered when needed
 #
-# To run (use your active env python):
+# To run (use our active env python):
 #   python -m shiny run --reload app.py
 # ============================================================
 
@@ -231,7 +231,7 @@ CLUSTER_CARD_COL_DICT = {
     ),
     "cluster_definition_v1": (
         "Human-readable meaning of the cluster label. "
-        "This is your narrative label and should be used in writeups and the UI."
+        "This is our narrative label and should be used in writeups and the UI."
     ),
     "n_providers": (
         "Number of providers in this cluster under the current filters. "
@@ -283,15 +283,15 @@ BENCHMARK_TOP_ROWS_COL_DICT = {
         "HCPCS code (procedure, service, or drug/supply code) for the row."
     ),
     "Place_Of_Srvc": (
-        "CMS place-of-service code (where the service occurred). "
-        "Example: 'O' often reflects outpatient settings (depends on your source coding)."
+        "Medicare place of service code for this row (site-of-care context). "
+        "Example: `O` indicates 'Office', an outpatient setting, while 'F' indicates 'Facility', an inpatient setting, in our dataset."
     ),
     "Year": (
         "Calendar year for the row."
     ),
     "observed_cost": (
         "Observed standardized cost per unit for this row (what was actually billed/paid in the dataset). "
-        "Unit matches your modeling target scale (the same unit used for expected_cost)."
+        "Unit matches our modeling target scale (the same unit used for expected_cost)."
     ),
     "expected_cost": (
         "Model-predicted expected standardized cost per unit for this row (D/G+V3 output). "
@@ -347,8 +347,8 @@ ANOM2A1_COL_DICT = {
 
     # Row-grain coordinates
     "Place_Of_Srvc": (
-        "Place of service code (POS). Part of the row grain. "
-        "Example: 'O' typically indicates outpatient."
+        "Medicare place of service code for this row (site-of-care context). "
+        "Example: `O` indicates 'Office', an outpatient setting, while 'F' indicates 'Facility', an inpatient setting, in our dataset."
     ),
     "Year": "Claim/service year. Part of the row grain.",
 
@@ -923,20 +923,20 @@ PP_ANOM_ROWS_COL_DICT = {
     ),
     "row_id": (
         "Unique identifier for the row-grain record in `eval_scored_DG_V3.parquet`. "
-        "This lets you trace the exact row back to the single source of truth."
+        "This lets us trace the exact row back to the single source of truth."
     ),
     "HCPCS_Cd": (
         "HCPCS procedure/drug/supply code for this row."
     ),
     "Place_Of_Srvc": (
         "Medicare place of service code for this row (site-of-care context). "
-        "Example: `O` often indicates an outpatient setting in your dataset."
+        "Example: `O` indicates 'Office', an outpatient setting, while 'F' indicates 'Facility', an inpatient setting, in our dataset."
     ),
     "Year": (
         "Calendar year for this row."
     ),
     "observed_cost": (
-        "Observed allowed/standardized cost for the row (what was billed/paid, depending on your definition)."
+        "Observed standardized cost for the row (what was billed/paid)."
     ),
     "expected_cost": (
         "Model-predicted expected cost for the same row, from the D/G+V3 expected-cost model."
@@ -1070,7 +1070,7 @@ def _selected_row_from_grid(input_obj, grid_id: str, df: pd.DataFrame) -> pd.Ser
 def _rules_text_for(which: str) -> str:
     """
     which in {"row_primary","row_alt","prov_primary","prov_alt"}
-    If your run_params.json has different nesting, we fall back to dumping whole file.
+    If our run_params.json has different nesting, we fall back to dumping whole file.
     """
     if not anom_params:
         return "No params.json loaded."
@@ -1637,7 +1637,7 @@ app_ui = ui.page_fluid(
             ui.navset_tab(
                 ui.nav_panel(
                     "Row-level",
-                    ui.p("Two complementary row-level worklists, frozen from your anomaly surfacing run.", class_="muted"),
+                    ui.p("Two complementary row-level worklists, frozen from our anomaly surfacing run.", class_="muted"),
                     ui.div(
                         ui.input_action_button("btn_row_primary_detail", "Show selected Primary row details", class_="btn-row"),
                         ui.input_action_button("btn_row_alt_detail", "Show selected Alt row details", class_="btn-row"),
